@@ -28,15 +28,24 @@ Follow the **[Hello AI World](#hello-ai-world)** tutorial for running inference 
 
 Hello AI World can be run completely onboard your Jetson, including live inferencing with TensorRT and transfer learning with PyTorch.  For installation instructions, see [System Setup](#system-setup).  It's then recommended to start with the [Inference](#inference) section to familiarize yourself with the concepts, before diving into [Training](#training) your own models.
 
-#### System Setup
+Hello AI World 教程可以 **完全在 Jetson 设备上运行**，包括：
 
-* [Setting up Jetson with JetPack](docs/jetpack-setup-2.md)
-* [Running the Docker Container](docs/aux-docker.md)
-* [Building the Project from Source](docs/building-repo-2.md)
+- 使用 TensorRT 进行实时推理
+- 使用 PyTorch 进行迁移学习（Transfer Learning）
 
-#### Inference
+如果需要安装说明，请查看 **系统设置（System Setup）**。
 
-* [Image Classification](docs/imagenet-console-2.md)
+建议先阅读 **推理（Inference）** 部分以熟悉概念，然后再继续学习 **训练（Training）** 部分来训练自己的模型。
+
+#### System Setup 系统设置（System Setup）
+
+* [Setting up Jetson with JetPack](docs/jetpack-setup-2.md)  设置 Jetson 和 JetPack
+* [Running the Docker Container](docs/aux-docker.md)  运行 Docker 容器
+* [Building the Project from Source](docs/building-repo-2.md)  从源码构建项目
+
+#### Inference 推理
+
+* [Image Classification  ](docs/imagenet-console-2.md) 图像分类（Image Classification）
 	* [Using the ImageNet Program on Jetson](docs/imagenet-console-2.md)
 	* [Coding Your Own Image Recognition Program (Python)](docs/imagenet-example-python-2.md)
 	* [Coding Your Own Image Recognition Program (C++)](docs/imagenet-example-2.md)
@@ -187,7 +196,7 @@ The project comes with a number of pre-trained models that are available to use 
 | TAO PeopleNet           | `peoplenet`        | `PEOPLENET`        | person, bag, face    |
 | TAO PeopleNet (pruned)  | `peoplenet-pruned` | `PEOPLENET_PRUNED` | person, bag, face    |
 | TAO DashCamNet          | `dashcamnet`       | `DASHCAMNET`       | person, car, bike, sign |
-| TAO TrafficCamNet       | `trafficcamnet`    | `TRAFFICCAMNET`    | person, car, bike, sign | 
+| TAO TrafficCamNet       | `trafficcamnet`    | `TRAFFICCAMNET`    | person, car, bike, sign |
 | TAO FaceDetect          | `facedetect`       | `FACEDETECT`       | face                 |
 
 <details>
@@ -281,7 +290,7 @@ In this area, links and resources for deep learning are listed:
 ## Two Days to a Demo (DIGITS)
 
 > **note:** the DIGITS/Caffe tutorial from below is deprecated.  It's recommended to follow the [Transfer Learning with PyTorch](#training) tutorial from Hello AI World.
- 
+
 <details>
 <summary>Expand this section to see original DIGITS tutorial (deprecated)</summary>
 <br/>
