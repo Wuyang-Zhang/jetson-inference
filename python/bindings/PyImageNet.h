@@ -26,7 +26,7 @@
 #include "PyInference.h"
 
 
-// Register object type
+// 向 Python 模块注册 imageNet 绑定类型
 bool PyImageNet_Register( PyObject* module );
 
 
