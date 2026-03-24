@@ -166,7 +166,9 @@ git submodule update --init --recursive
 
 jetson-inference：一个文件夹 + 多个子工程（Git仓库）,多仓库工程结构
 
+```
 git submodule update --init --recursive
+```
 
 等价于：
 
