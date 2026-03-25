@@ -1046,27 +1046,39 @@ bool tensorNet::ConfigureBuilder( nvinfer1::IBuilder* builder, uint32_t maxBatch
 }
 #endif
 
+// 《为什么要有这么多层？》：因为TensorRT 初始化参数非常复杂 ❗
+// 这些层的作用：简单接口 → 逐步补全参数 → 最终调用核心函数 “逐层补参 + 转发”： 参数不够 → 补默认值 → 转发
 
-// LoadNetwork
+
+
+// 【第1层包装】（最简单）
+// LoadNetwork用户友好版本（简单）Adapter（适配器）+ Overload（重载）
+// 这个函数不是干活的，它只是把参数整理好，交给真正的 LoadNetwork 去干活
 bool tensorNet::LoadNetwork( const char* prototxt_path, const char* model_path, const char* mean_path, 
 					    const char* input_blob, const char* output_blob, uint32_t maxBatchSize,
 					    precisionType precision, deviceType device, bool allowGPUFallback,
 					    nvinfer1::IInt8Calibrator* calibrator, cudaStream_t stream )
 {
-	std::vector<std::string> outputs;
+	// Step 1：转换为 vector
+	std::vector<std::string> outputs; // 把：单个输出 → 多输出容器；类型不同 → 调用另一个版本
 	outputs.push_back(output_blob);
-	
+	// Step 2：调用真正函数  底层实现版本（通用）；C++ 会自动选择“参数匹配的那个函数” 不是递归！
 	return LoadNetwork(prototxt_path, model_path, mean_path, input_blob, outputs, maxBatchSize, precision, device, allowGPUFallback );
 }
 
 
-// LoadNetwork
+// LoadNetwork   第二层包装函数  
+// 用户不用关心：Dims3 / binding / tensor shape 框架帮你处理
+// 把“没有指定输入尺寸”的调用，补一个默认尺寸 Dims3(1,1,1)，再转发给更底层的 LoadNetwork
 bool tensorNet::LoadNetwork( const char* prototxt_path, const char* model_path, const char* mean_path, 
 					    const char* input_blob, const std::vector<std::string>& output_blobs, 
 					    uint32_t maxBatchSize, precisionType precision,
 				   	    deviceType device, bool allowGPUFallback,
 					    nvinfer1::IInt8Calibrator* calibrator, cudaStream_t stream )
 {
+	// 上一层参数 没有输入尺寸  这一层 加了 Dims3(1,1,1)
+	// Dims3(1,1,1) 是 TensorRT 的一个结构：(C, H, W) 但这里不是“真的输入尺寸” ，这是：占位符（placeholder）
+	// 真正的输入尺寸会在后面自动推断（ONNX / engine / 网络结构）
 	return LoadNetwork(prototxt_path, model_path, mean_path,
 				    input_blob, Dims3(1,1,1), output_blobs,
 				    maxBatchSize, precision, device,
@@ -1074,7 +1086,14 @@ bool tensorNet::LoadNetwork( const char* prototxt_path, const char* model_path, 
 }
 
 
+
+
+
+
+
+
 // LoadNetwork
+// 为“每个输入 blob 自动补一个默认尺寸 Dims3(1,1,1)，然后交给最终版本的 LoadNetwork
 bool tensorNet::LoadNetwork( const char* prototxt_path, const char* model_path, const char* mean_path, 
 					    const std::vector<std::string>& input_blobs, 
 					    const std::vector<std::string>& output_blobs, 
@@ -1082,8 +1101,10 @@ bool tensorNet::LoadNetwork( const char* prototxt_path, const char* model_path, 
 				   	    deviceType device, bool allowGPUFallback,
 					    nvinfer1::IInt8Calibrator* calibrator, cudaStream_t stream )
 {
-	std::vector<Dims3> input_dims;
+	std::vector<Dims3> input_dims; // 创建输入尺寸容器 用来存：每个输入 tensor 的尺寸 (C,H,W)
 
+	// 遍历所有输入 blob  有几个输入 → 就创建几个 Dims3
+	// input_blobs = ["input_0", "input_1"]  input_dims = [  (1,1,1), (1,1,1)] 占位符（placeholder）
 	for( size_t n=0; n < input_blobs.size(); n++ )
 		input_dims.push_back(Dims3(1,1,1));
 
@@ -1094,7 +1115,10 @@ bool tensorNet::LoadNetwork( const char* prototxt_path, const char* model_path, 
 }
 
 
+
+
 // LoadNetwork
+// 把“单输入（string）+ 单尺寸（Dims3）”包装成“vector形式”，然后调用最终版本 LoadNetwork
 bool tensorNet::LoadNetwork( const char* prototxt_path, const char* model_path, const char* mean_path, 
 					    const char* input_blob, const Dims3& input_dim,
 					    const std::vector<std::string>& output_blobs, 
@@ -1102,12 +1126,21 @@ bool tensorNet::LoadNetwork( const char* prototxt_path, const char* model_path, 
 				   	    deviceType device, bool allowGPUFallback,
 					    nvinfer1::IInt8Calibrator* calibrator, cudaStream_t stream )
 {
+	// 用来统一格式：输入 blob 名 → vector<string> 输入尺寸 → vector<Dims3>
 	std::vector<std::string> inputs;
 	std::vector<Dims3> input_dims;
+
+	// 填充单个输入
+	/* input_blob = "input_0"
+	input_dim  = (3, 224, 224)
+
+	inputs = ["input_0"]
+	input_dims = [(3,224,224)] */
 
 	inputs.push_back(input_blob);
 	input_dims.push_back(input_dim);
 
+	// 调用真正版本
 	return LoadNetwork(prototxt_path, model_path, mean_path,
 				    inputs, input_dims, output_blobs,
 				    maxBatchSize, precision, device,
