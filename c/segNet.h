@@ -26,6 +26,18 @@
 
 #include "tensorNet.h"
 
+/*
+ * 这 3 个文件的分工是：
+ *   segNet.h   = 对外接口和成员定义
+ *   segNet.cpp = 主机侧流程控制（加载模型、预处理、推理、argmax、分发可视化）
+ *   segNet.cu  = 在 GPU 上生成 overlay/mask 的 CUDA kernel
+ *
+ * 这样拆开的原因：
+ *   1. .h 只暴露接口，外部代码不需要关心实现细节
+ *   2. .cpp 放普通 C++ / TensorRT 逻辑，便于维护
+ *   3. .cu 放 __global__ 代码，交给 NVCC 单独编译
+ */
+
 
 /**
  * Name of default input blob for segmentation model.
@@ -165,8 +177,16 @@ public:
 	virtual ~segNet();
 	
 	/**
- 	 * Perform the initial inferencing processing portion of the segmentation.
-	 * The results can then be visualized using the Overlay() and Mask() functions.      
+ 	 * 执行分割推理这一侧的主流程。
+	 * 这一步会：
+	 *   1. 把输入图像转换成网络需要的输入 tensor
+	 *   2. 调用 TensorRT 跑推理
+	 *   3. 对输出做 argmax，生成 mClassMap
+	 *
+	 * Process() 不会直接生成可视化图像。
+	 * 它先把中间分割结果存下来，后面的 Overlay()/Mask() 再继续使用。
+	 *
+	 * The results can then be visualized using the Overlay() and Mask() functions.
 	 * @param input the input image in CUDA device memory, with pixel values 0-255.
 	 * @param width width of the input image in pixels.
 	 * @param height height of the input image in pixels.
@@ -197,6 +217,7 @@ public:
 
 	/**
 	 * Produce a colorized segmentation mask.
+	 * 这里只生成彩色分割结果，不和原图做叠加。
 	 */
 	template<typename T> bool Mask( T* output, uint32_t width, uint32_t height, FilterMode filter=FILTER_LINEAR )				{ return Mask((void*)output, width, height, imageFormatFromType<T>(), filter); }
 	
@@ -219,6 +240,7 @@ public:
 
 	/**
 	 * Produce the segmentation overlay alpha blended on top of the original image.
+	 * 这一步依赖最近一次 Process() 保存下来的 mLastInputImg 和 mClassMap。
 	 * @param output output image in CUDA device memory, RGB/RGBA colorspace with values 0-255.
 	 * @param width width of the input image in pixels.
 	 * @param height height of the input image in pixels.
@@ -318,8 +340,22 @@ public:
 protected:
 	segNet();
 	
+	/*
+	 * classify() 的作用是把 TensorRT 的原始输出 mOutputs[0]
+	 * 转成更紧凑的 mClassMap。
+	 *
+	 * 网络输出通常是 [C,H,W] 的分数张量，
+	 * 但后续可视化更适合使用“每个位置一个 classID”的类别图。
+	 */
 	bool classify( const char* ignore_class );
 
+	/*
+	 * 这两个函数负责把 mClassMap 转成真正的输出图像：
+	 *   overlayPoint()  = 最近邻采样，边界更硬，速度更快
+	 *   overlayLinear() = 双线性插值，边界更平滑，显示更自然
+	 *
+	 * 正常情况下它们会继续调用 segNet.cu 里的 cudaSegOverlay()。
+	 */
 	bool overlayPoint( void* input, uint32_t in_width, uint32_t in_height, imageFormat in_format, void* output, uint32_t out_width, uint32_t out_height, imageFormat out_format, bool mask_only );
 	bool overlayLinear( void* input, uint32_t in_width, uint32_t in_height, imageFormat in_format, void* output, uint32_t out_width, uint32_t out_height, imageFormat out_format, bool mask_only );
 	
@@ -327,17 +363,22 @@ protected:
 	bool loadClassLabels( const char* filename );
 	bool saveClassLegend( const char* filename );
 
-	std::vector<std::string> mClassLabels;
-	std::string mClassPath;
+	std::vector<std::string> mClassLabels;  /**< CPU: 类别名称列表，只在主机侧用于查找和显示 */
+	std::string mClassPath;                 /**< CPU: 类别标签文件路径 */
 
-	bool*    mColorsAlphaSet;	/**< true if class color had been explicitly set from file or user */
-	float4*  mClassColors;		/**< array of overlay colors in shared CPU/GPU memory */
-	uint8_t* mClassMap;			/**< runtime buffer for the argmax-classified class index of each tile */
+	bool*    mColorsAlphaSet;	/**< CPU: 记录哪些类别颜色的 alpha 是显式设置的，便于 SetOverlayAlpha() 有选择地跳过 */
+	float4*  mClassColors;		/**< CPU/GPU 共享映射内存: 每个类别的 RGBA 颜色，GPU kernel 会直接读取 */
+	uint8_t* mClassMap;			/**< CPU/GPU 共享映射内存: argmax 后的类别图，每个输出网格位置一个 classID */
 	
-	void*  	  mLastInputImg;	/**< last input image to be processed, stored for overlay */
-	uint32_t 	  mLastInputWidth;	/**< width in pixels of last input image to be processed */
-	uint32_t 	  mLastInputHeight;	/**< height in pixels of last input image to be processed */
-	imageFormat mLastInputFormat; /**< pixel format of last input image */
+	/*
+	 * 最近一次输入图像的缓存信息。
+	 * 这些不是网络输出的一部分，而是为了让 Overlay() 在 Process() 结束后
+	 * 仍然能拿到原图做 alpha blending。
+	 */
+	void*  	  mLastInputImg;	/**< GPU: 最近一次输入图像的设备指针，只缓存引用，不拥有其生命周期 */
+	uint32_t 	  mLastInputWidth;	/**< 最近一次输入图像的宽度 */
+	uint32_t 	  mLastInputHeight;	/**< 最近一次输入图像的高度 */
+	imageFormat mLastInputFormat; /**< 最近一次输入图像的像素格式 */
 };
 
 

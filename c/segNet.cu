@@ -24,6 +24,21 @@
 #include "cudaVector.h"
 #include "segNet.h"
 
+/*
+ * segNet.cu 是 GPU 可视化实现层。
+ *
+ * 输入：
+ *   input        - 原始输入图像，位于 GPU device memory（overlay 模式下需要）
+ *   class_colors - 每个类别的 RGBA 颜色表，位于 CPU/GPU 共享映射内存，GPU 可直接读取
+ *   scores       - 这里实际上传的是 segNet::mClassMap，也就是 argmax 后的类别图
+ *
+ * 输出：
+ *   output       - 目标 overlay/mask 图像，位于 GPU device memory
+ *
+ * 为什么单独放到 CUDA：
+ *   overlay/mask 的生成是典型的逐像素并行任务，分辨率一高就很适合放到 GPU 上做。
+ */
+
 
 // gpuSegOverlay
 template<typename T, bool filter_linear, bool mask_only>
@@ -31,6 +46,7 @@ __global__ void gpuSegOverlay( T* input, const int in_width, const int in_height
 						 T* output, const int out_width, const int out_height,
 						 float4* class_colors, uint8_t* scores, const int2 scores_dim )
 {
+	// 每个线程负责输出图像中的一个像素。
 	const int x = blockIdx.x * blockDim.x + threadIdx.x;
 	const int y = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -42,10 +58,11 @@ __global__ void gpuSegOverlay( T* input, const int in_width, const int in_height
 
 	#define LOOKUP_CLASS_MAP(ix, iy)	scores[iy * scores_dim.x + ix]
 
-	// point or linear filtering mode
+	// point / linear 两种模式共用同一个模板 kernel。
+	// 用模板参数做区分，可以让编译器提前生成特化版本，减少运行时判断。
 	if( !filter_linear )
 	{
-		// calculate coordinates in scores cell
+		// 最近邻模式：把输出像素直接映射到类别图上的一个网格位置。
 		const float cx = px * float(scores_dim.x);	
 		const float cy = py * float(scores_dim.y);
 
@@ -58,7 +75,9 @@ __global__ void gpuSegOverlay( T* input, const int in_width, const int in_height
 		// find the color of this class
 		const float4 classColor = class_colors[classIdx];
 
-		// output the pixel
+		// 输出 mask 或 overlay。
+		// mask_only=true  -> 只写类别颜色
+		// mask_only=false -> 再和原图做 alpha blending
 		if( mask_only )
 		{
 			// only draw the segmentation mask
@@ -84,7 +103,8 @@ __global__ void gpuSegOverlay( T* input, const int in_width, const int in_height
 	}
 	else
 	{
-		// calculate coordinates in scores cell
+		// 双线性模式：从类别图周围 4 个网格的颜色做插值，
+		// 视觉上会比最近邻更平滑。
 		const float bx = (px * float(scores_dim.x)) - 0.5f;
 		const float by = (py * float(scores_dim.y)) - 0.5f;
 
@@ -107,7 +127,7 @@ __global__ void gpuSegOverlay( T* input, const int in_width, const int in_height
 						  class_colors[classIdx.z],
 						  class_colors[classIdx.w] };
 
-		// compute bilinear weights
+		// 先计算插值权重，再分别对 RGBA 四个通道做插值。
 		const float x1d = cx - float(x1);
 		const float y1d = cy - float(y1);
 
@@ -128,7 +148,7 @@ __global__ void gpuSegOverlay( T* input, const int in_width, const int in_height
 			cc[0].z * x1y1f + cc[1].z * x2y1f + cc[2].z * x2y2f + cc[3].z * x1y2f,
 			cc[0].w * x1y1f + cc[1].w * x2y1f + cc[2].w * x2y2f + cc[3].w * x1y2f );
 
-		// output the pixel
+		// 和上面一样，分 mask / overlay 两条路径。
 		if( mask_only )
 		{
 			// only draw the segmentation mask
@@ -161,6 +181,10 @@ cudaError_t cudaSegOverlay( void* input, uint32_t in_width, uint32_t in_height,
 					   float4* class_colors, uint8_t* scores, const int2& scores_dim,
 					   bool filter_linear, bool mask_only, cudaStream_t stream )
 {
+	// 这是 host 侧的调度函数：
+	//   1. 参数检查
+	//   2. 根据图像格式选择 kernel 特化版本
+	//   3. 在指定的 CUDA stream 上发射 kernel
 	if( !output )
 		return cudaErrorInvalidDevicePointer;
 
@@ -179,10 +203,12 @@ cudaError_t cudaSegOverlay( void* input, uint32_t in_width, uint32_t in_height,
 		return cudaErrorInvalidValue;
 	}
 
-	// launch kernel
+	// 用 8x8 的 block 启动 kernel。
+	// 这里每个输出像素的计算量不大，所以不需要太大的 block。
 	const dim3 blockDim(8, 8);
 	const dim3 gridDim(iDivUp(out_width,blockDim.x), iDivUp(out_height,blockDim.y));
 
+	// type 对应不同的像素存储格式（uchar3/uchar4/float3/float4）。
 	#define LAUNCH_OVERLAY_KERNEL(type, filter, mask) gpuSegOverlay<type, filter, mask><<<gridDim, blockDim, 0, stream>>>((type*)input, in_width, in_height, (type*)output, out_width, out_height, class_colors, scores, scores_dim)
 	
 	#define LAUNCH_OVERLAY(filter, mask) 				\
